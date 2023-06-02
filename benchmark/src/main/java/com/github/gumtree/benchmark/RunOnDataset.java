@@ -29,6 +29,7 @@ import com.github.gumtreediff.gen.TreeGenerators;
 import com.github.gumtreediff.gen.jdt.JdtTreeGenerator;
 import com.github.gumtreediff.gen.python.PythonTreeGenerator;
 import com.github.gumtreediff.gen.treesitter.PythonTreeSitterTreeGenerator;
+import com.github.gumtreediff.gen.srcml.SrcmlCppTreeGenerator;
 import com.github.gumtreediff.io.DirectoryComparator;
 import com.github.gumtreediff.matchers.*;
 import com.github.gumtreediff.tree.TreeContext;
@@ -65,6 +66,8 @@ public class RunOnDataset {
          */
         TreeGenerators.getInstance().install(
                 PythonTreeSitterTreeGenerator.class, PythonTreeSitterTreeGenerator.class.getAnnotation(Register.class));
+        TreeGenerators.getInstance().install(
+                SrcmlCppTreeGenerator.class, SrcmlCppTreeGenerator.class.getAnnotation(Register.class));
         OUTPUT = new FileWriter(args[1]);
 
         String header = "case;algorithm;" + "t;".repeat(TIME_MEASURES) + "s;ni;nd;nu;nm";

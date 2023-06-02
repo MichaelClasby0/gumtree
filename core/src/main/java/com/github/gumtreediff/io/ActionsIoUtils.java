@@ -73,6 +73,17 @@ public final class ActionsIoUtils {
         };
     }
 
+    public static ActionSerializer toStat(TreeContext sctx, EditScript actions,
+                                              MappingStore mappings) throws IOException {
+        return new ActionSerializer(sctx, mappings, actions) {
+
+            @Override
+            protected ActionFormatter newFormatter(TreeContext ctx, Writer writer) throws Exception {
+                return new StatFormatter(ctx, writer);
+            }
+        };
+    }
+
     public abstract static class ActionSerializer extends AbstractSerializer {
         final TreeContext context;
         final MappingStore mappings;
@@ -348,6 +359,101 @@ public final class ActionsIoUtils {
 
         private String toS(Tree node) {
             return String.format("%s", node.toString());
+        }
+    }
+
+    static class StatFormatter implements ActionFormatter {
+        final Writer writer;
+        final TreeContext context;
+        int size = 0;
+        int nbIns = 0;
+        int nbDel = 0;
+        int nbUpd = 0;
+        int nbMov = 0;
+
+        public StatFormatter(TreeContext ctx, Writer writer) {
+            this.context = ctx;
+            this.writer = writer;
+        }
+
+        @Override
+        public void startOutput() throws Exception {
+        }
+
+        @Override
+        public void endOutput() throws Exception {
+            write(String.format("size: %d", size));
+            write(String.format("insertions: %d", nbIns));
+            write(String.format("deletions: %d", nbDel));
+            write(String.format("updates: %d", nbUpd));
+            write(String.format("moves: %d", nbMov));
+        }
+
+        @Override
+        public void startMatches() throws Exception {
+        }
+
+        @Override
+        public void match(Tree srcNode, Tree destNode) throws Exception {
+        }
+
+        @Override
+        public void endMatches() throws Exception {
+        }
+
+        @Override
+        public void startActions() throws Exception {
+        }
+
+        @Override
+        public void insertRoot(Insert action, Tree node) throws Exception {
+            nbIns++;
+            size++;
+        }
+
+        @Override
+        public void insertAction(Insert action, Tree node, Tree parent, int index) throws Exception {
+            nbIns++;
+            size++;
+        }
+
+        @Override
+        public void insertTreeAction(TreeInsert action, Tree node, Tree parent, int index) throws Exception {
+            nbIns += action.getNode().getMetrics().size;
+            size++;
+        }
+
+        @Override
+        public void moveAction(Move action, Tree src, Tree dst, int position) throws Exception {
+            nbMov += action.getNode().getMetrics().size;
+            size++;
+        }
+
+        @Override
+        public void updateAction(Update action, Tree src, Tree dst) throws Exception {
+            nbUpd++;
+            size++;
+        }
+
+        @Override
+        public void deleteAction(Delete action, Tree node) throws Exception {
+            nbDel++;
+            size++;
+        }
+
+        @Override
+        public void deleteTreeAction(TreeDelete action, Tree node) throws Exception {
+            nbDel += action.getNode().getMetrics().size;
+            size++;
+        }
+
+        @Override
+        public void endActions() throws Exception {
+        }
+
+        private void write(String fmt, Object... objs) throws IOException {
+            writer.append(fmt);
+            writer.append("\n");
         }
     }
 

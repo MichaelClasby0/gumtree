@@ -128,6 +128,13 @@ public class TextDiff extends AbstractDiffClient<TextDiff.TextDiffOptions> {
                     throws IOException {
                 return ActionsIoUtils.toJson(sctx, actions, mappings);
             }
+        },
+        STAT {
+            @Override
+            ActionsIoUtils.ActionSerializer getSerializer(TreeContext sctx, EditScript actions, MappingStore mappings)
+                    throws IOException {
+                return ActionsIoUtils.toStat(sctx, actions, mappings);
+            }
         };
 
         abstract ActionsIoUtils.ActionSerializer getSerializer(TreeContext sctx, EditScript actions,
