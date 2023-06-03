@@ -32,6 +32,11 @@ import com.github.gumtreediff.gen.treesitter.PythonTreeSitterTreeGenerator;
 import com.github.gumtreediff.gen.srcml.SrcmlCppTreeGenerator;
 import com.github.gumtreediff.io.DirectoryComparator;
 import com.github.gumtreediff.matchers.*;
+import com.github.gumtreediff.matchers.CompositeMatchers.ClassicGumtree;
+import com.github.gumtreediff.matchers.CompositeMatchers.ClassicGumtreeTheta;
+import com.github.gumtreediff.matchers.CompositeMatchers.HybridGumtree;
+import com.github.gumtreediff.matchers.CompositeMatchers.XyMatcher;
+import com.github.gumtreediff.matchers.optimal.rted.RtedMatcher;
 import com.github.gumtreediff.tree.TreeContext;
 import com.github.gumtreediff.utils.Pair;
 
@@ -49,8 +54,10 @@ public class RunOnDataset {
     private static String ROOT_FOLDER;
     private static FileWriter OUTPUT;
     private static final List<MatcherConfig> configurations = new ArrayList<>();
+    private static long setupTime;
 
     public static void main(String[] args) throws IOException, ClassNotFoundException {
+        long start = System.nanoTime();
         if (args.length < 2) {
             System.err.println(args.length);
             System.err.println("Wrong command. Expected arguments: INPUT_FOLDER OUTPUT_FILE. Got: "
@@ -70,7 +77,7 @@ public class RunOnDataset {
                 SrcmlCppTreeGenerator.class, SrcmlCppTreeGenerator.class.getAnnotation(Register.class));
         OUTPUT = new FileWriter(args[1]);
 
-        String header = "case;algorithm;" + "t;".repeat(TIME_MEASURES) + "s;ni;nd;nu;nm";
+        String header = "case;algorithm;" + "t;".repeat(TIME_MEASURES) + "pt;st;s;ni;nd;nu;nm";
         OUTPUT.append(header + "\n");
 
         for (int i = 2; i < args.length; i++) {
@@ -91,7 +98,14 @@ public class RunOnDataset {
             configurations.add(new MatcherConfig("hybrid-20", CompositeMatchers.HybridGumtree::new, smallBuMinsize()));
             configurations.add(new MatcherConfig("opt-20", CompositeMatchers.ClassicGumtree::new, smallBuMinsize()));
             configurations.add(new MatcherConfig("opt-200", CompositeMatchers.ClassicGumtree::new, largeBuMinsize()));
+            configurations.add(new MatcherConfig("cd", CompositeMatchers.ChangeDistiller::new));
+            configurations.add(new MatcherConfig("xy", CompositeMatchers.XyMatcher::new));
+            configurations.add(new MatcherConfig("theta", CompositeMatchers.Theta::new));
+            configurations.add(new MatcherConfig("cd-theta", CompositeMatchers.ChangeDistillerTheta::new));
+            configurations.add(new MatcherConfig("classic-theta", CompositeMatchers.ClassicGumtreeTheta::new));
+            configurations.add(new MatcherConfig("rted-theta", CompositeMatchers.RtedTheta::new));
         }
+        setupTime = System.nanoTime() - start;
 
         DirectoryComparator comparator = new DirectoryComparator(args[0] + "/before", args[0] + "/after");
         comparator.compare();
@@ -112,24 +126,45 @@ public class RunOnDataset {
     }
 
     private static void handleCase(File src, File dst) throws IOException {
+        long startedTime = System.nanoTime();
         TreeContext srcT = TreeGenerators.getInstance().getTree(src.getAbsolutePath());
         TreeContext dstT = TreeGenerators.getInstance().getTree(dst.getAbsolutePath());
+        long parsingTime = System.nanoTime() - startedTime;
         for (MatcherConfig config : configurations) {
             Matcher m = config.instantiate();
             handleMatcher(src.getAbsolutePath().substring(ROOT_FOLDER.length() + 1),
-                    config.name, m, srcT, dstT);
+                    config.name, m, srcT, dstT, parsingTime);
         }
     }
 
     private static void handleMatcher(String file, String matcher, Matcher m,
-            TreeContext src, TreeContext dst) throws IOException {
+            TreeContext src, TreeContext dst, long parsingTime) throws IOException {
+        System.out.println("Matching " + file + " with " + matcher);
         long[] times = new long[TIME_MEASURES];
         MappingStore mappings = null;
+        Boolean oom = false;
         for (int i = 0; i < TIME_MEASURES; i++) {
             long startedTime = System.nanoTime();
-            mappings = m.match(src.getRoot(), dst.getRoot());
-            long elapsedTime = System.nanoTime() - startedTime;
-            times[i] = elapsedTime;
+            try {
+                mappings = m.match(src.getRoot(), dst.getRoot());
+            } catch (OutOfMemoryError e) {
+                System.out.println("Out of memory for " + file + " with " + matcher);
+                oom = true;
+                break;
+            } finally {
+                long elapsedTime = System.nanoTime() - startedTime;
+                times[i] = elapsedTime;
+            }
+        }
+        if (oom) {
+            OUTPUT.append(file + ";");
+            OUTPUT.append(matcher + ";");
+            for (int i = 0; i < TIME_MEASURES; i++) {
+                OUTPUT.append(times[i] + ";");
+            }
+            OUTPUT.append(parsingTime + ";");
+            OUTPUT.append("OOM;OOM;OOM;OOM;OOM\n");
+            return;
         }
         Arrays.sort(times);
         EditScriptGenerator g = new SimplifiedChawatheScriptGenerator();
@@ -158,6 +193,8 @@ public class RunOnDataset {
         OUTPUT.append(matcher + ";");
         for (int i = 0; i < TIME_MEASURES; i++)
             OUTPUT.append(times[i] + ";");
+        OUTPUT.append(parsingTime + ";");
+        OUTPUT.append(setupTime + ";");
         int size = s.size();
         OUTPUT.append(size + ";");
         OUTPUT.append(nbIns + ";");
