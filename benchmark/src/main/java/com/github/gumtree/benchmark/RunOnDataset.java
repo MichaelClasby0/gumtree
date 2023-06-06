@@ -36,9 +36,12 @@ import com.github.gumtreediff.matchers.CompositeMatchers.ClassicGumtree;
 import com.github.gumtreediff.matchers.CompositeMatchers.ClassicGumtreeTheta;
 import com.github.gumtreediff.matchers.CompositeMatchers.HybridGumtree;
 import com.github.gumtreediff.matchers.CompositeMatchers.XyMatcher;
+import com.github.gumtreediff.matchers.heuristic.LcsMatcher;
 import com.github.gumtreediff.matchers.optimal.rted.RtedMatcher;
+import com.github.gumtreediff.matchers.optimal.zs.ZsMatcher;
 import com.github.gumtreediff.tree.TreeContext;
 import com.github.gumtreediff.utils.Pair;
+
 
 import java.io.File;
 import java.io.FileWriter;
@@ -47,10 +50,17 @@ import java.lang.reflect.Constructor;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
 
 public class RunOnDataset {
-    private static final int TIME_MEASURES = 5;
+    private static final int TIME_MEASURES = 1;
+    private static final int TIMEOUT = 5;
     private static String ROOT_FOLDER;
     private static FileWriter OUTPUT;
     private static final List<MatcherConfig> configurations = new ArrayList<>();
@@ -98,12 +108,14 @@ public class RunOnDataset {
             configurations.add(new MatcherConfig("hybrid-20", CompositeMatchers.HybridGumtree::new, smallBuMinsize()));
             configurations.add(new MatcherConfig("opt-20", CompositeMatchers.ClassicGumtree::new, smallBuMinsize()));
             configurations.add(new MatcherConfig("opt-200", CompositeMatchers.ClassicGumtree::new, largeBuMinsize()));
-            configurations.add(new MatcherConfig("cd", CompositeMatchers.ChangeDistiller::new));
-            configurations.add(new MatcherConfig("xy", CompositeMatchers.XyMatcher::new));
-            configurations.add(new MatcherConfig("theta", CompositeMatchers.Theta::new));
-            configurations.add(new MatcherConfig("cd-theta", CompositeMatchers.ChangeDistillerTheta::new));
-            configurations.add(new MatcherConfig("classic-theta", CompositeMatchers.ClassicGumtreeTheta::new));
-            configurations.add(new MatcherConfig("rted-theta", CompositeMatchers.RtedTheta::new));
+            // configurations.add(new MatcherConfig("cd", CompositeMatchers.ChangeDistiller::new));
+            // configurations.add(new MatcherConfig("xy", CompositeMatchers.XyMatcher::new));
+            // configurations.add(new MatcherConfig("theta", CompositeMatchers.Theta::new));
+            // configurations.add(new MatcherConfig("cd-theta", CompositeMatchers.ChangeDistillerTheta::new));
+            // configurations.add(new MatcherConfig("classic-theta", CompositeMatchers.ClassicGumtreeTheta::new));
+            // configurations.add(new MatcherConfig("rted-theta", CompositeMatchers.RtedTheta::new));
+            // configurations.add(new MatcherConfig("zs", ZsMatcher::new));
+            // configurations.add(new MatcherConfig("lcs", LcsMatcher::new));
         }
         setupTime = System.nanoTime() - start;
 
@@ -112,17 +124,19 @@ public class RunOnDataset {
         int done = 0;
         int size = comparator.getModifiedFiles().size();
         for (Pair<File, File> pair : comparator.getModifiedFiles()) {
-            done++;
             int pct = (int) (((float) done / (float) size) * 100);
-            System.out.printf("\r%s %s  Done", displayBar(pct), pct);
+            System.out.printf("\r%s %s%% %s/%s   Done", displayBar(pct), pct, done, size);
             try {
                 handleCase(pair.first, pair.second);
             }
             catch (SyntaxException e) {
                 System.out.println("Problem parsing " + pair.first.getPath());
             }
+            OUTPUT.flush();
+            done++;
         }
         OUTPUT.close();
+        System.out.println("\nCompleted");
     }
 
     private static void handleCase(File src, File dst) throws IOException {
@@ -139,34 +153,63 @@ public class RunOnDataset {
 
     private static void handleMatcher(String file, String matcher, Matcher m,
             TreeContext src, TreeContext dst, long parsingTime) throws IOException {
-        System.out.println("Matching " + file + " with " + matcher);
+        // System.out.println("Matching " + file + " with " + matcher);
         long[] times = new long[TIME_MEASURES];
         MappingStore mappings = null;
         Boolean oom = false;
+        Boolean timeout = false;
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+
+        // First run is always the slowest by a large margin, the following runs are roughly the same and much faster
+        // We care about the 1 off scenario, so we only take the first run
         for (int i = 0; i < TIME_MEASURES; i++) {
             long startedTime = System.nanoTime();
+
+            Future<?> future = executor.submit(() -> {
+                try {
+                    return m.match(src.getRoot(), dst.getRoot());
+                } catch (OutOfMemoryError e) {
+                    throw e;
+                }
+            });
+
             try {
-                mappings = m.match(src.getRoot(), dst.getRoot());
-            } catch (OutOfMemoryError e) {
-                System.out.println("Out of memory for " + file + " with " + matcher);
-                oom = true;
+                mappings = (MappingStore) future.get(TIMEOUT, TimeUnit.SECONDS);
+            } catch (ExecutionException e) {
+                if (e.getCause() instanceof OutOfMemoryError) {
+                    System.err.println("Out of memory for " + file + " with " + matcher);
+                    oom = true;
+                    break;
+                } else {
+                    throw new RuntimeException(e);
+                }
+            } catch (TimeoutException e) {
+                System.err.println("Timeout for " + file + " with " + matcher);
+                timeout = true;
                 break;
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
             } finally {
                 long elapsedTime = System.nanoTime() - startedTime;
                 times[i] = elapsedTime;
             }
         }
-        if (oom) {
+        executor.shutdownNow();
+        Arrays.sort(times);
+
+        if (oom || timeout) {
+            String error = oom ? "OOM" : "TIMEOUT";
             OUTPUT.append(file + ";");
             OUTPUT.append(matcher + ";");
             for (int i = 0; i < TIME_MEASURES; i++) {
                 OUTPUT.append(times[i] + ";");
             }
             OUTPUT.append(parsingTime + ";");
-            OUTPUT.append("OOM;OOM;OOM;OOM;OOM\n");
+            OUTPUT.append(setupTime + ";");
+            OUTPUT.append(error + ";" + error + ";" + error + ";" + error + ";" + error +  "\n");
             return;
         }
-        Arrays.sort(times);
+
         EditScriptGenerator g = new SimplifiedChawatheScriptGenerator();
         EditScript s = g.computeActions(mappings);
 
