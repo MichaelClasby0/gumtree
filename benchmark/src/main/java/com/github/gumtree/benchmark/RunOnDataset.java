@@ -108,14 +108,19 @@ public class RunOnDataset {
             configurations.add(new MatcherConfig("hybrid-20", CompositeMatchers.HybridGumtree::new, smallBuMinsize()));
             configurations.add(new MatcherConfig("opt-20", CompositeMatchers.ClassicGumtree::new, smallBuMinsize()));
             configurations.add(new MatcherConfig("opt-200", CompositeMatchers.ClassicGumtree::new, largeBuMinsize()));
-            // configurations.add(new MatcherConfig("cd", CompositeMatchers.ChangeDistiller::new));
             // configurations.add(new MatcherConfig("xy", CompositeMatchers.XyMatcher::new));
             // configurations.add(new MatcherConfig("theta", CompositeMatchers.Theta::new));
+            // configurations.add(new MatcherConfig("lcs", LcsMatcher::new));
             // configurations.add(new MatcherConfig("cd-theta", CompositeMatchers.ChangeDistillerTheta::new));
             // configurations.add(new MatcherConfig("classic-theta", CompositeMatchers.ClassicGumtreeTheta::new));
-            // configurations.add(new MatcherConfig("rted-theta", CompositeMatchers.RtedTheta::new));
+            
+            // VERY SLOW
+            // configurations.add(new MatcherConfig("cd", CompositeMatchers.ChangeDistiller::new));
             // configurations.add(new MatcherConfig("zs", ZsMatcher::new));
-            // configurations.add(new MatcherConfig("lcs", LcsMatcher::new));
+            
+
+            // OOM
+            // configurations.add(new MatcherConfig("rted-theta", CompositeMatchers.RtedTheta::new));
         }
         setupTime = System.nanoTime() - start;
 
@@ -141,15 +146,43 @@ public class RunOnDataset {
 
     private static void handleCase(File src, File dst) throws IOException {
         long startedTime = System.nanoTime();
-        TreeContext srcT = TreeGenerators.getInstance().getTree(src.getAbsolutePath());
-        TreeContext dstT = TreeGenerators.getInstance().getTree(dst.getAbsolutePath());
+        TreeContext srcT;
+        TreeContext dstT;
+        try{
+            srcT = TreeGenerators.getInstance().getTree(src.getAbsolutePath());
+            dstT = TreeGenerators.getInstance().getTree(dst.getAbsolutePath());
+        } catch (OutOfMemoryError e) {
+            System.out.println("Out of memory parsing " + src.getAbsolutePath().substring(ROOT_FOLDER.length() + 1));
+            return;
+        }
         long parsingTime = System.nanoTime() - startedTime;
+        System.out.println("Parsed " + src.getAbsolutePath().substring(ROOT_FOLDER.length() + 1) + " in " + parsingTime/1000000000 + "s");
         for (MatcherConfig config : configurations) {
             Matcher m = config.instantiate();
             handleMatcher(src.getAbsolutePath().substring(ROOT_FOLDER.length() + 1),
                     config.name, m, srcT, dstT, parsingTime);
         }
     }
+
+    private static void shutdownAndAwaitTermination(ExecutorService pool) {
+    // Disable new tasks from being submitted
+    pool.shutdown();
+    try {
+        // Wait a while for existing tasks to terminate
+        if (!pool.awaitTermination(60, TimeUnit.SECONDS)) {
+            // Cancel currently executing tasks forcefully
+            pool.shutdownNow();
+            // Wait a while for tasks to respond to being cancelled
+            if (!pool.awaitTermination(60, TimeUnit.SECONDS))
+                System.err.println("Pool did not terminate");
+        }
+    } catch (InterruptedException ex) {
+        // (Re-)Cancel if current thread also interrupted
+        pool.shutdownNow();
+        // Preserve interrupt status
+        Thread.currentThread().interrupt();
+    }
+}
 
     private static void handleMatcher(String file, String matcher, Matcher m,
             TreeContext src, TreeContext dst, long parsingTime) throws IOException {
@@ -185,6 +218,7 @@ public class RunOnDataset {
                 }
             } catch (TimeoutException e) {
                 System.err.println("Timeout for " + file + " with " + matcher);
+                // future.cancel(true);
                 timeout = true;
                 break;
             } catch (InterruptedException e) {
@@ -195,6 +229,7 @@ public class RunOnDataset {
             }
         }
         executor.shutdownNow();
+        // shutdownAndAwaitTermination(executor);
         Arrays.sort(times);
 
         if (oom || timeout) {
